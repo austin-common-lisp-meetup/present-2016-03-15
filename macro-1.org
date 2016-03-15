@@ -1,0 +1,425 @@
+* Build a Macro
+* ...but first, some basics
+
+  - Generate code from their unevaluated arguments, at compile time
+  - All of Lisp available to you at macro expansion time
+* ALL OF LISP
+* Generating some Lisp code using Lisp
+#+BEGIN_SRC lisp :results raw
+(list 'progn
+  '(setf foo 42)
+  '(print "setted foo")
+  (lisp-implementation-type))
+#+END_SRC
+#+RESULTS:
+(PROGN (SETF FOO 42) (PRINT "setted foo") "SBCL")
+* Can define macros this way, too
+#+BEGIN_SRC lisp :results none
+(defmacro my-macro ()
+   (list 'progn '(setf foo 42) '(print "setted foo") (lisp-implementation-type)))
+#+END_SRC
+Then, testing with MACROEXPAND-1:
+#+BEGIN_SRC lisp :results raw
+(macroexpand-1 '(my-macro))
+#+END_SRC
+#+RESULTS:
+(PROGN (SETF FOO 42) (PRINT "setted foo") "SBCL")
+* Some syntax for making this easier
+
+ - quasiquote     - `  (backtick)
+ - unquote        - ,  (comma)
+ - splice unquote - ,@ (comma-at)
+* Some syntax for making this easier
+
+
+ - handy for building lists in regular code too
+#+BEGIN_SRC lisp
+(list 'a 'b ,c ,d)
+ ;; equivalent to
+`(a b ,c ,d)
+#+END_SRC
+e.g.
+#+BEGIN_SRC lisp
+(let ((c 42)
+      (d 43))
+   (equal `(a b ,c ,d)
+          '(a b 42 43)))
+#+END_SRC
+#+RESULTS:
+: T
+ - every , or ,@ must be paired with a `
+
+
+* Why macros are awesome
+* Why macros are awesome
+
+ - You get to program, the programming language!
+* Example: Java
+
+ - Another curly-brace, algol60-derived language
+ - Unleashed on the world in 1995
+
+* Example: Java
+
+ - Not Programmable
+
+* Example: Java
+
+ - Typical resource managemnt in Java:
+#+BEGIN_SRC java :results none
+InputStream input = null;
+try {
+   input = // ... acquire a resource somehow
+   doSomething(input);
+} finally {
+   input.close();
+}
+#+END_SRC
+* Example: Java
+
+ - Error prone too... Oops:
+#+BEGIN_SRC java :results none
+InputStream input = null;
+try {
+   input = // ... acquire a resource somehow
+   doSomething(input);
+} finally {
+   if (input != null) {
+     try {
+       input.close();
+     } catch (Exception ignore) {
+     }
+   }
+}
+#+END_SRC
+* Example: Java
+
+ - lobbying, committies and 16 years later, TADA!
+#+BEGIN_SRC java :results none
+//// Java 7
+try (InputStream input = new //* ... *//) {
+  doSomething(input);
+}
+#+END_SRC
+  - still a bit rigid though
+* Example: Lisp
+#+BEGIN_SRC lisp
+(open thing-spec)
+(operate-on thing)
+(close thing)
+#+END_SRC lisp
+* Example: Lisp
+
+ - should have handler for errors:
+#+BEGIN_SRC lisp
+(let ((thing (open thing-spec)))
+  (unwind-protect
+       (operate-on thing)
+    (close thing)))
+#+END_SRC
+* Example: Lisp
+
+** Problem: very common "pattern"
+
+ - Lisp comes with its own: WITH-OPEN-FILE macro
+ - what if it didn't? let's create our own
+* Build a Macro
+#+BEGIN_SRC lisp
+(defmacro with-thing (thing-spec &body body)
+  `(let ((thing (open ,thing-spec)))
+     (unwind-protect
+          (progn
+            ,@body)
+       (close thing))))
+
+(with-thing thing-spec
+  (operate-on foo))
+#+END_SRC
+* Build a Macro
+
+** Expansion test:
+#+BEGIN_SRC lisp
+(macroexpand-1
+          '(with-thing my-thing-spec
+            (munge thing)
+            (randomize thing)))
+#+END_SRC
+#+BEGIN_SRC lisp
+(LET ((THING (OPEN MY-THING-SPEC)))
+  (UNWIND-PROTECT
+      (PROGN (MUNGE THING) (RANDOMIZE THING))
+    (CLOSE THING)))
+#+END_SRC
+* Build a Macro
+
+** Problem
+
+ - Our macro "captures" the name "thing" for itself. i.e. how the
+   resource is referred to in the body is hardcoded as "thing"
+
+ - thing in let has lexical scope, so what if we want to refer to
+   something in the enclosing scope?
+* Build a Macro
+
+ - need a way to pass in the name we will use
+#+BEGIN_SRC lisp
+(defmacro with-thing ((var thing-spec) &body body)
+  `(let ((,var (open ,thing-spec)))
+     (unwind-protect
+          (progn
+            ,@body)
+       (close ,var))))
+
+(macroexpand-1 '(with-thing (my-thing my-thing-spec)
+                  (munge my-thing)
+                  (randomize my-thing)))
+
+(LET ((MY-THING (OPEN MY-THING-SPEC)))
+  (UNWIND-PROTECT (PROGN (MUNGE MY-THING) (RANDOMIZE MY-THING))
+    (CLOSE MY-THING)))
+#+END_SRC
+
+* Build a Macro
+
+** Add a new feature
+
+  - log the thing when it's opened
+
+#+BEGIN_SRC lisp
+(defmacro with-thing ((var thing-spec) &body body)
+  `(let ((,var (open ,thing-spec)))
+     (format t "~A was just opened~%" ,thing-spec)
+     (unwind-protect
+          (progn
+            ,@body)
+       (close ,var))))
+
+(macroexpand-1 '(with-thing (my-thing my-thing-spec)
+                  (munge my-thing)
+                  (randomize my-thing)))
+
+(LET ((MY-THING (OPEN MY-THING-SPEC)))
+  (FORMAT T "~A was just opened~%" MY-THING-SPEC)
+  (UNWIND-PROTECT (PROGN (MUNGE MY-THING) (RANDOMIZE MY-THING))
+    (CLOSE MY-THING)))
+#+END_SRC
+
+* Build a Macro
+
+** Problem
+
+ - Say we need to compute the my-thing-spec, maybe read out of some
+   external resource (maybe a config file?)
+
+#+BEGIN_SRC lisp
+(macroexpand-1 '(with-thing (my-thing (read-thing-spec #p"/etc/thing.conf"))
+                  (munge my-thing)
+                  (randomize my-thing)))
+
+(LET ((MY-THING (OPEN (READ-THING-SPEC #P"/etc/thing.conf"))))
+  (FORMAT T "~A was just opened~%" (READ-THING-SPEC #P"/etc/thing.conf"))
+  (UNWIND-PROTECT (PROGN (MUNGE MY-THING) (RANDOMIZE MY-THING))
+    (CLOSE MY-THING)))
+#+END_SRC
+ - read-thing-spec gets called twice on macro expansion :-(
+* Build a Macro
+
+** expand it once into a local variable
+
+#+BEGIN_SRC lisp
+(defmacro with-thing ((var thing-spec) &body body)
+  `(let* ((temp-var ,thing-spec)
+          (,var (open temp-var)))
+     (format t "~A was just opened~%" temp-var)
+     (unwind-protect
+          (progn
+            ,@body)
+       (close ,var))))
+
+(macroexpand-1 '(with-thing (my-thing (read-thing-spec #p"/etc/thing.conf"))
+                  (munge my-thing)
+                  (randomize my-thing)))
+
+(LET* ((TEMP-VAR (READ-THING-SPEC #P"/etc/thing.conf"))
+       (MY-THING (OPEN TEMP-VAR)))
+  (FORMAT T "~A was just opened~%" TEMP-VAR)
+  (UNWIND-PROTECT (PROGN (MUNGE MY-THING) (RANDOMIZE MY-THING))
+    (CLOSE MY-THING)))
+#+END_SRC
+
+* Build a Macro
+
+** Problem
+
+  - what if our surrounding code already uses "temp-var"? Our macro
+    captured temp-var for itself :-(
+  - e.g.
+
+#+BEGIN_SRC lisp
+(let ((temp-var 42))
+  (with-thing (my-thing (read-thing-spec #p"/etc/thing.conf"))
+    (munge my-thing)
+    (randomize my-thing)
+    (incf temp-var)))
+#+END_SRC
+
+* Build a Macro
+
+** Problem
+
+#+BEGIN_SRC lisp
+(macroexpand-1 '(with-thing (my-thing (read-thing-spec #p"/etc/thing.conf"))
+                  (incf temp-var)
+                  (munge my-thing)
+                  (randomize my-thing)))
+
+(LET* ((TEMP-VAR (READ-THING-SPEC #P"/etc/thing.conf"))
+       (MY-THING (OPEN TEMP-VAR)))
+  (FORMAT T "~A was just opened~%" TEMP-VAR)
+  (UNWIND-PROTECT (PROGN
+                    (INCF TEMP-VAR)
+                    (MUNGE MY-THING)
+                    (RANDOMIZE MY-THING))
+    (CLOSE MY-THING)))
+#+END_SRC
+
+* Build a Macro
+
+** GENSYM to the rescue
+
+ - need a uniquely generated symbol for our temp-var so we don't clash
+
+#+BEGIN_SRC lisp :results raw
+(loop repeat 5 collect (gensym))
+#+END_SRC
+#+RESULTS:
+(#:G696 #:G697 #:G698 #:G699 #:G700)
+
+* Build a Macro
+
+** GENSYM
+
+#+BEGIN_SRC lisp
+(defmacro with-thing ((var thing-spec) &body body)
+  (let ((temp-var (gensym)))
+    `(let* ((,temp-var ,thing-spec)
+            (,var (open ,temp-var)))
+       (format t "~A was just opened~%" ,temp-var)
+       (unwind-protect
+            (progn
+              ,@body)
+         (close ,var)))))
+#+END_SRC lisp
+
+* Build a Macro
+
+** GENSYM
+#+BEGIN_SRC lisp
+(macroexpand-1 '(with-thing (my-thing (read-thing-spec #p"/etc/thing.conf"))
+                  (incf temp-var)
+                  (munge my-thing)
+                  (randomize my-thing)))
+
+(LET* ((#:G773 (READ-THING-SPEC #P"/etc/thing.conf"))
+       (MY-THING (OPEN #:G773)))
+  (FORMAT T "~A was just opened~%" #:G773)
+  (UNWIND-PROTECT (PROGN
+                    (INCF TEMP-VAR)
+                    (MUNGE MY-THING)
+                    (RANDOMIZE MY-THING))
+    (CLOSE MY-THING)))
+#+END_SRC
+* Build a Macro
+
+** How does it compare...
+
+ - ...with a similar macro, built into the Lisp implementation?
+
+#+BEGIN_SRC lisp
+;; (Clozure Common Lisp)
+
+(macroexpand-1 '(with-open-stream (thing (get-config #p"/tmp/thing.conf"))
+                  (munge thing)
+                  (randomize thing)))
+
+(LET (#:G7634)
+  (UNWIND-PROTECT
+      (LET ((THING (SETQ #:G7634 (GET-CONFIG #P"/tmp/thing.conf"))))
+        (MUNGE THING)
+        (RANDOMIZE THING))
+    (WHEN #:G7634 (CLOSE #:G7634))))
+#+END_SRC
+
+* Key Points
+
+ - "patterns" in other languages, can be abstracted away in Lisp via macros
+
+ - you can program Lisp in Lisp as well as program in Lisp
+
+ - ` , and ,@
+
+ - macro args are not evaluated at expansion
+
+ - gensym can be used for creating globally unique symbols
+
+* Extended Example
+
+ - from https://github.com/lispnik/alists/blob/master/alists.lisp
+ - when working with alists, this can be common:
+
+#+BEGIN_SRC lisp
+ (let ((bar (cdr (assoc :bar alist)))
+       (foo (cdr (assoc "foo" alist :test #'string=)))
+       ...) ;; cdr this, assoc that...
+   ...)
+#+END_SRC
+ - Abstract with a macro!
+#+BEGIN_SRC lisp
+(let-assoc ((bar :bar)
+            (foo "foo" :test #'string=)
+            ...)
+   alist
+  ...)
+#+END_SRC
+
+* Extended Example
+
+** Defintion
+#+BEGIN_SRC lisp
+(defmacro let-assoc (bindings alist &body body)
+  (let ((alist-temp (gensym)))
+    `(let* ((,alist-temp ,alist)
+            ,@(mapcar (lambda (binding)
+                        (destructuring-bind (name item &rest assoc-keys)
+                            binding
+                          (if assoc-keys
+                              `(,name (cdr (assoc ,item ,alist-temp ,@assoc-keys)))
+                              `(,name (cdr (assoc ,item ,alist-temp))))))
+                      bindings))
+       ,@body)))
+#+END_SRC
+* Extended Example
+
+** Expansion
+
+#+BEGIN_SRC lisp
+(macroexpand-1 '(let-assoc ((bar :bar)
+                            (foo "foo" :test #'string=))
+                   an-alist
+                 (list foo bar)))
+
+(LET* ((#:G702 AN-ALIST)
+       (BAR (CDR (ASSOC :BAR #:G702)))
+       (FOO (CDR (ASSOC "foo" #:G702 :TEST #'STRING=))))
+  (LIST FOO BAR))
+#+END_SRC
+
+ - note: usage doesn't mention CDR/ASSOC
+ - could replace LET-ASSOC with a LET-HASHTABLE without changing the
+   body code
+ - new dimensions in polymorphism!?
+
+
+(org-babel-do-load-languages
+ 'org-babel-load-languages
+ '((lisp . t)))
